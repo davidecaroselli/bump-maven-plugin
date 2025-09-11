@@ -1,5 +1,6 @@
 package com.davidecaroselli.bump;
 
+import com.davidecaroselli.bump.git.Git;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
@@ -17,11 +18,24 @@ abstract class VersionMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
+        // only run for root project
+        if (project.getParent() != null) return;
+
         Log log = getLog();
 
         Version version = getVersion();
         Version bumpedVersion = bump(version);
         log.info("Bumping version: " + version + " >> " + bumpedVersion);
+
+        Git git = Git.open(project.getBasedir());
+
+        // Check Git status
+        if (git != null && !git.isClean())
+            throw new MojoFailureException("Git working directory is not clean: " + git);
+        if (git != null && git.hasHeadTag())
+            throw new MojoFailureException("HEAD is already tagged: " + git);
+        if (git != null && !git.isMainBranch())
+            throw new MojoFailureException("Not on main branch: " + git);
 
         // Updating root POM
         PomFile pom = PomFile.read(project.getFile());
@@ -34,10 +48,15 @@ abstract class VersionMojo extends AbstractMojo {
             for (String module : modules) {
                 File moduleDir = new File(project.getBasedir(), module);
                 PomFile modulePom = PomFile.read(new File(moduleDir, "pom.xml"));
-                if (setParentVersion(modulePom, version, bumpedVersion))
+                if (setParentVersion(modulePom, version, bumpedVersion) ||
+                        setVersion(modulePom, version, bumpedVersion))
                     modulePom.save();
             }
         }
+
+        // Tag the new version
+        if (git != null)
+            git.tag(bumpedVersion.toString());
     }
 
     protected abstract Version bump(Version version);
